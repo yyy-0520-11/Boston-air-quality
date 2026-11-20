@@ -108,7 +108,7 @@ footer li{margin:3px 0}
 <main>
 <div class="hero">
   <h1>How safe is the air in your city today?</h1>
-  <p>Air quality readings from our monitor boxes in each Boston neighborhood, live weather from the National Weather Service, and the data behind Boston's environmental justice gaps.</p>
+  <p>Hourly air quality for each Boston neighborhood from EPA AirNow monitors, live weather from the National Weather Service, and the data behind Boston's environmental justice gaps.</p>
 </div>
 
 <!-- MAP -->
@@ -133,13 +133,14 @@ footer li{margin:3px 0}
       <div class="row2"><span>Conditions</span><b id="s-cond">—</b></div>
       <div class="row2"><span>Wind</span><b id="s-wind">—</b></div>
       <div class="row2"><span>Today</span><b id="s-today" style="text-align:right;max-width:170px">—</b></div>
-      <p class="label" style="margin-top:14px">Air quality (monitor box)</p>
+      <p class="label" style="margin-top:14px">Air quality</p>
       <div class="row2"><span>AQI</span><b id="s-pm">—</b></div>
       <div class="row2"><span>Status</span><span class="pill" id="s-cat">—</span></div>
       <p class="small" id="s-advice" style="margin:10px 0 0">—</p>
+      <p class="small" id="s-aq-src" style="margin:6px 0 0">Sample data</p>
     </div>
   </div>
-  <p class="notice" id="map-note">Weather in this preview is the NWS Boston snapshot from Nov 12, 8:54 am, shown for every neighborhood. When the site is hosted on its own address, each neighborhood gets its own live NWS forecast. Air quality values are sample data until the monitor boxes are connected. Neighborhood shapes are simplified.</p>
+  <p class="notice" id="map-note">Loading…</p>
 </section>
 
 <!-- WEATHER -->
@@ -272,6 +273,7 @@ footer li{margin:3px 0}
     <li>Boston Globe (2021) and CBS Boston on neighborhood heat; Bay State Banner on Chinatown air quality</li>
     <li>Harvard and Boston University methane study, PNAS (2021)</li>
     <li>U.S. EPA, Air Quality Index for PM2.5 (2024 update)</li>
+    <li>U.S. EPA AirNow, hourly AQI from Boston-area monitoring stations (airnow.gov)</li>
   </ul>
   <p style="margin-top:12px">Boston Climate Watch is a student project. Air station readings shown are sample data until the station is connected.</p>
 </footer>
@@ -439,7 +441,8 @@ function clipHalf(poly,pi,pj){
     var poly=[[0,0],[MW,0],[MW,MH],[0,MH]];
     for(var j=0;j<sites.length;j++)if(j!==i)poly=clipHalf(poly,sites[i],sites[j]);
     var g=el('g',{class:'city',tabindex:0,'aria-label':c[0]},cells);
-    el('path',{d:'M'+poly.map(function(q){return q[0].toFixed(1)+','+q[1].toFixed(1);}).join('L')+'Z',fill:aqCol(c[3]),'fill-opacity':.82,stroke:'#fff','stroke-width':2},g);
+    c.g=g;
+    c.el=el('path',{d:'M'+poly.map(function(q){return q[0].toFixed(1)+','+q[1].toFixed(1);}).join('L')+'Z',fill:aqCol(c[3]),'fill-opacity':.82,stroke:'#fff','stroke-width':2},g);
     var tx=el('text',{x:sites[i][0]+c[4],y:sites[i][1]+c[5]+4,'text-anchor':'middle',class:'nlabel'},labels);tx.textContent=c[0];
     g.addEventListener('mouseenter',function(e){showTip(c,e);});
     g.addEventListener('mousemove',function(e){moveTip(e);});
@@ -465,11 +468,44 @@ async function cityWx(c){
     var w={temp:ob.temperature.value!=null?cToF(ob.temperature.value)+'°F':p0.temperature+'°F',cond:ob.textDescription||p0.shortForecast,
       wind:ob.windSpeed.value!=null?dir(ob.windDirection.value)+' '+Math.round(ob.windSpeed.value*0.621)+' mph':p0.windDirection+' '+p0.windSpeed,
       today:p0.name+': '+p0.shortForecast+', '+p0.temperature+'°F',src:'Live NWS, station '+st.features[0].properties.stationIdentifier};
-    liveOK=true;wxCache[c[0]]=w;
-    document.getElementById('map-note').textContent='Weather is live from the National Weather Service for each neighborhood. Air quality values are sample data until the monitor boxes are connected. Map is simplified.';
+    liveOK=true;wxCache[c[0]]=w;updateMapNote();
     return w;
-  }catch(e){liveOK=false;return SNAPWX;}
+  }catch(e){liveOK=false;updateMapNote();return SNAPWX;}
 }
+
+/* ---------- LIVE AQI from aqi.json (EPA AirNow, updated hourly by GitHub Actions) ---------- */
+var aqiData=null;
+function fmtTime(s){var d=new Date(s);return isNaN(d)?s:d.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function updateMapNote(){
+  var wx=liveOK?'Weather is live from the National Weather Service for each neighborhood.':
+    'Weather is the NWS Boston snapshot from Nov 12, 8:54 am, shown for every neighborhood.';
+  var aq=aqiData?'Air quality is from EPA AirNow, updated '+fmtTime(aqiData.updated)+'. Each neighborhood uses its nearest monitoring station, so neighbors can share a value.':
+    'Air quality values are sample data (live data could not be loaded).';
+  document.getElementById('map-note').textContent=wx+' '+aq+' Neighborhood shapes are simplified.';
+}
+function aqSource(c){
+  if(!aqiData||aqiData.neighborhoods[c[0]]==null)return 'Sample data';
+  var st=aqiData.stations&&aqiData.stations[c[0]];
+  return 'EPA AirNow'+(st?', station: '+st:'')+' · '+fmtTime(aqiData.updated);
+}
+async function loadAQI(){
+  try{
+    var r=await fetch('aqi.json?t='+Date.now());
+    if(!r.ok)throw new Error(r.status);
+    var j=await r.json();
+    if(!j.neighborhoods)throw new Error('bad file');
+    aqiData=j;
+    CITIES.forEach(function(c){
+      var v=j.neighborhoods[c[0]];
+      if(typeof v==='number'){c[3]=v;c.el.setAttribute('fill',aqCol(v));}
+    });
+    var sel=CITIES.find(function(c){return c.g&&c.g.classList.contains('sel');});
+    if(sel)showAQ(sel);
+  }catch(e){}
+  updateMapNote();
+}
+loadAQI();
+setInterval(loadAQI,10*60*1000);
 function tipHTML(c,w){var k=cat(c[3]);
   return '<b>'+c[0]+'</b><br>'+w.temp+' · '+w.cond+'<br>Wind '+w.wind+'<br><span style="color:'+aqCol(c[3])+';font-weight:600">AQI '+c[3]+' · '+k[0]+'</span>';}
 var curTip=null;
@@ -480,12 +516,16 @@ async function showTip(c,e){
 }
 function moveTip(e){var tp=document.getElementById('tip'),bx=document.getElementById('mapbox').getBoundingClientRect();
   var x=e.clientX-bx.left+14,y=e.clientY-bx.top+14;if(x+200>bx.width)x-=228;if(y+110>bx.height)y-=124;tp.style.left=x+'px';tp.style.top=y+'px';}
-async function select(c,g){
-  document.querySelectorAll('.city.sel').forEach(function(n){n.classList.remove('sel');});g.classList.add('sel');
-  document.getElementById('s-name').textContent=c[0];
+function showAQ(c){
   var k=cat(c[3]),pc=document.getElementById('s-cat');
   document.getElementById('s-pm').textContent=c[3];pc.textContent=k[0];pc.className='pill '+k[1];
   document.getElementById('s-advice').textContent=advice(c[3]);
+  document.getElementById('s-aq-src').textContent=aqSource(c);
+}
+async function select(c,g){
+  document.querySelectorAll('.city.sel').forEach(function(n){n.classList.remove('sel');});g.classList.add('sel');
+  document.getElementById('s-name').textContent=c[0];
+  showAQ(c);
   var w=await cityWx(c);
   document.getElementById('s-temp').textContent=w.temp;document.getElementById('s-cond').textContent=w.cond;
   document.getElementById('s-wind').textContent=w.wind;document.getElementById('s-today').textContent=w.today;
